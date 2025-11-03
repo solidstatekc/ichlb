@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      LIB_URL: "https://YOURDOMAIN/homelibrary.json"  # <-- CHANGE THIS
+      LIB_URL: "https://sternoutsider.pinballkc.com/homelb/homelibrary.json"  # <-- CHANGE THIS
     steps:
       - uses: actions/checkout@v4
 
@@ -74,7 +74,7 @@ jobs:
           <script>
           fetch('./data').then(r=>r.ok?r:r).catch(()=>null); // noop to ensure directory
           async function main(){
-            const res = await fetch('https://YOURDOMAIN/homelibrary.json'); // <-- CHANGE THIS
+            const res = await fetch('https://sternoutsider.pinballkc.com/homelb/homelibrary.json'); // <-- CHANGE THIS
             const lib = await res.json();
             const ul = document.getElementById('list');
             (lib.suites || []).forEach(s => {
