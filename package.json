@@ -1,0 +1,12 @@
+{
+  "name": "home-leaderboard-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "private": false,
+  "dependencies": {
+    "playwright": "^1.48.0"
+  },
+  "scripts": {
+    "scrape": "node stern-leaderboard-scrape.mjs"
+  }
+}

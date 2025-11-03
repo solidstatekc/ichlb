@@ -1,0 +1,97 @@
+name: Scrape & Publish Leaderboards
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes
+  workflow_dispatch:
+    inputs:
+      kiosk_url:
+        description: "Optional: scrape a single kiosk URL now"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      LIB_URL: "https://YOURDOMAIN/homelibrary.json"  # <-- CHANGE THIS
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install deps
+        run: |
+          npm ci || npm i
+          npx playwright install --with-deps
+
+      - name: Fetch homelibrary.json
+        run: |
+          set -e
+          curl -fsSL "$LIB_URL" -o homelibrary.json
+          echo "homelibrary.json:"
+          cat homelibrary.json
+
+      - name: Prepare public dir
+        run: mkdir -p public/data
+
+      - name: Optional single URL
+        if: ${{ inputs.kiosk_url != '' }}
+        run: |
+          echo "Scraping single kiosk URL: ${{ inputs.kiosk_url }}"
+          node stern-leaderboard-scrape.mjs "${{ inputs.kiosk_url }}"
+
+      - name: Scrape suites from library
+        if: ${{ inputs.kiosk_url == '' }}
+        run: |
+          set -e
+          if ! command -v jq >/dev/null; then sudo apt-get update && sudo apt-get install -y jq; fi
+          COUNT=$(jq '.suites | length' homelibrary.json)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No suites in homelibrary.json"; exit 0
+          fi
+          jq -r '.suites[]' homelibrary.json | while read -r SUITE; do
+            echo "Scraping suite: $SUITE"
+            node stern-leaderboard-scrape.mjs "$SUITE"
+          done
+
+      - name: Build index.html (optional viewer)
+        run: |
+          cat > public/index.html <<'HTML'
+          <!doctype html><meta charset="utf-8">
+          <title>Leaderboards</title>
+          <style>body{font-family:system-ui;margin:2rem} li{margin:.25rem 0}</style>
+          <h1>Leaderboards</h1>
+          <ul id="list"></ul>
+          <script>
+          fetch('./data').then(r=>r.ok?r:r).catch(()=>null); // noop to ensure directory
+          async function main(){
+            const res = await fetch('https://YOURDOMAIN/homelibrary.json'); // <-- CHANGE THIS
+            const lib = await res.json();
+            const ul = document.getElementById('list');
+            (lib.suites || []).forEach(s => {
+              const li = document.createElement('li');
+              li.innerHTML = \`<a href="./data/\${s}.json">\${s}</a>\`;
+              ul.appendChild(li);
+            });
+          }
+          main();
+          </script>
+          HTML
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
