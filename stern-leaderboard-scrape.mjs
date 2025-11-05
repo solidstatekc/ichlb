@@ -16,6 +16,22 @@ function urlToSuite(u) {
   catch { return null; }
 }
 
+function makeTitleCode(name) {
+  const fallback = 'UNK';
+  if (!name) return fallback;
+  const cleaned = name.toUpperCase().replace(/[^A-Z]/g, '');
+  const code = cleaned.slice(0, 3);
+  return code || fallback;
+}
+
+function rgbToHex(rgb) {
+  if (!rgb) return null;
+  const values = rgb.match(/\d+/g);
+  if (!values || values.length < 3) return null;
+  const [r, g, b] = values.slice(0, 3).map(Number);
+  return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
 const TARGET_URL = isUuidish(arg) ? suiteToUrl(arg) : arg;
 const SUITE_ID   = isUuidish(arg) ? arg : (urlToSuite(arg) || 'unknown');
 
@@ -153,6 +169,41 @@ async function captureAllGamesOverTime(page, {
   const outPath = path.join('public', 'data', SUITE_ID + '.json');
   await fs.writeFile(outPath, JSON.stringify(out, null, 2), 'utf8');
 
+  const leaderboardmod = {
+    success: true,
+    message_number: 0,
+    leaderboard: {
+      name: 'Home Leaderboard',
+      titles: [],
+      scores: []
+    }
+  };
+
+  for (const game of games) {
+    const titleName = game?.game || 'Unknown Game';
+    leaderboardmod.leaderboard.titles.push({
+      title_name: titleName,
+      title_code: makeTitleCode(titleName)
+    });
+
+    for (const row of game.rows || []) {
+      leaderboardmod.leaderboard.scores.push({
+        title_name: titleName,
+        username: row.player || '',
+        initials: '',
+        is_all_accesss: false,
+        avatar_path: row.avatar_img || null,
+        background_color_hex: rgbToHex(row.avatar_bg),
+        score: row.score ?? null,
+        score_formatted: row.score_formatted ?? null
+      });
+    }
+  }
+
+  const outModPath = path.join('public', 'data', `${SUITE_ID}-mod.json`);
+  await fs.writeFile(outModPath, JSON.stringify(leaderboardmod, null, 2), 'utf8');
+
   const totalRows = games.reduce((n,g)=> n + (g.rows ? g.rows.length : 0), 0);
   console.log('Saved', outPath, '(' + totalRows + ' rows across ' + games.length + ' game(s))');
+  console.log('Saved', outModPath, '(' + leaderboardmod.leaderboard.scores.length + ' total scores)');
 })().catch(e => { console.error(e); process.exit(1); });
