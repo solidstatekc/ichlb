@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      LIB_URL: "https://sternoutsider.pinballkc.com/homelb/homelibrary.json" # TODO: set to your server URL
+      LIB_URL: "https://sternoutsider.pinballkc.com/homelb/homelibrary.json"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -60,7 +60,7 @@ jobs:
           <ul id="list"></ul>
           <script>
           async function main(){
-            const resp = await fetch('${{ env.LIB_URL }}');
+            const resp = await fetch('https://sternoutsider.pinballkc.com/homelb/homelibrary.json');
             const lib = await resp.json();
             const ul = document.getElementById('list');
             (lib.suites||[]).forEach(s=>{
