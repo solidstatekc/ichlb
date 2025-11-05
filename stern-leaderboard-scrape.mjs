@@ -19,15 +19,30 @@ function urlToSuite(u) {
 const TARGET_URL = isUuidish(arg) ? suiteToUrl(arg) : arg;
 const SUITE_ID   = isUuidish(arg) ? arg : (urlToSuite(arg) || 'unknown');
 
+// Extract games currently visible in the DOM (single snapshot)
 async function extractGamesSnapshot(page) {
   return await page.$$eval('div[class^="kiosk-leaderboard_kioskLeaderboard"]', (blocks) => {
     const onlyDigits = (s) => (s || '').replace(/[^\d]/g, '');
     const numish     = (s) => /^\D*\d[\d,.\s]*\D*$/.test(s || '');
     const hasScoreLikeInName = (s) => /\d{1,3}(?:,\d{3})+(?:\b|$)/.test(s || '');
+
     const getBgUrl = (el) => {
       const bg = el?.style?.backgroundImage || '';
       const m = bg.match(/url\(["']?([^"')]+)["']?\)/);
       return m ? m[1] : null;
+    };
+
+    const resolveNextImageSrc = (imgEl) => {
+      if (!imgEl) return null;
+      const src = imgEl.getAttribute('src') || '';
+      // Try to unwrap Next.js optimizer param ?url=...
+      try {
+        const u = new URL(src, location.origin);
+        const p = u.searchParams.get('url');
+        return p ? decodeURIComponent(p) : src;
+      } catch {
+        return src || null;
+      }
     };
 
     return Array.from(blocks).map((block) => {
@@ -43,16 +58,34 @@ async function extractGamesSnapshot(page) {
         const rankTxt  = el.querySelector('h5[class^="leaderboard-score_rank"]')?.textContent?.trim() || '';
         const nameTxt  = el.querySelector('h5[class^="leaderboard-score_username"]')?.textContent?.trim() || '';
         const scoreTxt = el.querySelector('h5[class^="leaderboard-score_scorePoints"]')?.textContent?.trim() || '';
+
+        // Avatar bits
+        const avatarWrap = el.querySelector('div[class*="leaderboard-score_avatar"]');
+        const avatarBg   = avatarWrap?.style?.backgroundColor || null;
+        const avatarImg  = resolveNextImageSrc(avatarWrap?.querySelector('img'));
+
         const rank  = parseInt(onlyDigits(rankTxt)) || null;
         const score = numish(scoreTxt) ? parseInt(onlyDigits(scoreTxt)) : null;
+
+        // Skip junk/ticker rows or malformed rows
         if (!rank || !score || !nameTxt || hasScoreLikeInName(nameTxt)) continue;
-        rows.push({ rank, player: nameTxt, score, score_formatted: scoreTxt || null });
+
+        rows.push({
+          rank,
+          player: nameTxt,
+          score,
+          score_formatted: scoreTxt || null,
+          avatar_bg: avatarBg,     // e.g. "rgb(57, 157, 97)"
+          avatar_img: avatarImg    // resolved original image URL when possible
+        });
       }
       rows.sort((a,b)=>a.rank-b.rank);
+
       return { game: title, art, rows };
     }).filter(g => g.rows.length > 0);
   });
 }
+
 
 async function captureAllGamesOverTime(page, {
   durationMs = 40000,
