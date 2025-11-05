@@ -2,6 +2,11 @@
 import { chromium } from 'playwright';
 import fs from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const GAMES_META_PATH = path.join(__dirname, 'games-meta.json');
 
 const arg = process.argv[2] || '';
 if (!arg) {
@@ -16,12 +21,49 @@ function urlToSuite(u) {
   catch { return null; }
 }
 
-function makeTitleCode(name) {
+function normalizeTitleName(name) {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function fallbackTitleCode(name) {
   const fallback = 'UNK';
   if (!name) return fallback;
   const cleaned = name.toUpperCase().replace(/[^A-Z]/g, '');
   const code = cleaned.slice(0, 3);
   return code || fallback;
+}
+
+function buildMetaIndex(metaList) {
+  const byNorm = new Map();
+  for (const entry of metaList) {
+    const norm = normalizeTitleName(entry.name);
+    if (norm) byNorm.set(norm, entry);
+
+    const codeNorm = normalizeTitleName(entry.code);
+    if (codeNorm && !byNorm.has(codeNorm)) byNorm.set(codeNorm, entry);
+
+    for (const model of entry.game_models || []) {
+      const aliasNorm = normalizeTitleName(model.custom_display_name);
+      if (aliasNorm && !byNorm.has(aliasNorm)) byNorm.set(aliasNorm, entry);
+    }
+  }
+  return { byNorm, list: metaList };
+}
+
+function findMetaForTitle(titleName, index) {
+  if (!index) return null;
+  const norm = normalizeTitleName(titleName);
+  if (!norm) return null;
+
+  if (index.byNorm.has(norm)) return index.byNorm.get(norm);
+
+  for (const entry of index.list) {
+    const metaNorm = normalizeTitleName(entry.name);
+    if (metaNorm && (metaNorm.includes(norm) || norm.includes(metaNorm))) {
+      return entry;
+    }
+  }
+  return null;
 }
 
 function rgbToHex(rgb) {
@@ -157,6 +199,15 @@ async function captureAllGamesOverTime(page, {
   const games = await captureAllGamesOverTime(page, { durationMs: 40000, pollMs: 600 });
   await browser.close();
 
+  let metaIndex = null;
+  try {
+    const metaRaw = await fs.readFile(GAMES_META_PATH, 'utf8');
+    const metaList = JSON.parse(metaRaw);
+    metaIndex = buildMetaIndex(metaList);
+  } catch (err) {
+    console.warn('Could not load games meta list:', err?.message || err);
+  }
+
   await fs.mkdir(path.join(process.cwd(), 'public', 'data'), { recursive: true });
   const out = {
     suite: SUITE_ID,
@@ -181,9 +232,12 @@ async function captureAllGamesOverTime(page, {
 
   for (const game of games) {
     const titleName = game?.game || 'Unknown Game';
+    const metaEntry = metaIndex ? findMetaForTitle(titleName, metaIndex) : null;
+    const titleCode = metaEntry?.code || fallbackTitleCode(titleName);
+
     leaderboardmod.leaderboard.titles.push({
       title_name: titleName,
-      title_code: makeTitleCode(titleName)
+      title_code: titleCode
     });
 
     for (const row of game.rows || []) {
