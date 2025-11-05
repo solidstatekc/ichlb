@@ -1,6 +1,5 @@
 // stern-leaderboard-scrape.mjs
-// Run: node stern-leaderboard-scrape.mjs <SUITE_ID or FULL_URL>
-
+// Usage: node stern-leaderboard-scrape.mjs <SUITE_ID or FULL_URL>
 import { chromium } from 'playwright';
 import fs from 'fs/promises';
 import path from 'path';
@@ -11,9 +10,7 @@ if (!arg) {
   process.exit(2);
 }
 
-function isUuidish(s) {
-  return /^[0-9a-fA-F-]{32,40}$/.test(s);
-}
+function isUuidish(s) { return /^[0-9a-fA-F-]{32,40}$/.test(s); }
 function suiteToUrl(suite) {
   return `https://insider.sternpinball.com/leaderboard/kiosk/${suite}`;
 }
@@ -28,94 +25,46 @@ function urlToSuite(u) {
 const TARGET_URL = isUuidish(arg) ? suiteToUrl(arg) : arg;
 const SUITE_ID = isUuidish(arg) ? arg : (urlToSuite(arg) || 'unknown');
 
-// DOM extraction (table-first)
-async function extractRows(page) {
-  // Try table
-  try { await page.waitForSelector('table tbody tr', { timeout: 15000 }); } catch {}
-  const tableInfo = await page.evaluate(() => {
-    const tables = Array.from(document.querySelectorAll('table'));
-    if (!tables.length) return null;
-    const s = tables.map((t, i) => ({ rows: t.querySelectorAll('tbody tr').length, selector: `table:nth-of-type(${i + 1})` }))
-                    .sort((a,b)=>b.rows-a.rows);
-    return s[0] || null;
-  });
+// --- Multi-game extractor ---
+async function extractGames(page) {
+  try { await page.waitForSelector('div[class^="kiosk-leaderboard_kioskLeaderboard"]', { timeout: 15000 }); } catch {}
+  return await page.$$eval('div[class^="kiosk-leaderboard_kioskLeaderboard"]', (blocks) => {
+    const onlyDigits = (s) => (s || '').replace(/[^\d]/g, '');
+    const numish     = (s) => /^\D*\d[\d,.\s]*\D*$/.test(s || '');
+    const hasScoreLikeInName = (s) => /\d{1,3}(?:,\d{3})+(?:\b|$)/.test(s || '');
 
-  if (tableInfo && tableInfo.rows > 0) {
-    return await page.$$eval(`${tableInfo.selector} tbody tr`, (trs) => {
-      const onlyDigits = (s) => (s||'').replace(/[^\d]/g,'');
-      const numish = (s) => /^\D*\d[\d,.\s]*\D*$/.test(s||'');
-      const out = [];
-      for (const tr of trs) {
-        const cells = Array.from(tr.querySelectorAll('th,td')).map(td=>td.textContent.trim()).filter(Boolean);
-        if (!cells.length) continue;
-        let rank=null, player=null, scoreFmt=null;
-        if (cells.length >= 3) {
-          rank = parseInt(onlyDigits(cells[0])) || null;
-          player = cells.slice(1, -1).join(' ').replace(/\s+/g, ' ');
-          scoreFmt = cells.at(-1) || null;
-        } else if (cells.length === 2) {
-          const parts = cells[1].split(/\n+/).map(s=>s.trim()).filter(Boolean);
-          rank = parseInt(onlyDigits(cells[0])) || null;
-          player = parts.slice(0, -1).join(' ') || cells[1];
-          scoreFmt = parts.at(-1) || null;
-        } else {
-          const parts = cells[0].split(/\n+/).map(s=>s.trim()).filter(Boolean);
-          if (parts.length >= 3) {
-            rank = parseInt(onlyDigits(parts[0])) || null;
-            player = parts.slice(1, -1).join(' ');
-            scoreFmt = parts.at(-1) || null;
-          } else {
-            continue;
-          }
-        }
-        const score = scoreFmt && numish(scoreFmt) ? parseInt(onlyDigits(scoreFmt)) : null;
-        out.push({ rank, player, score, score_formatted: scoreFmt || null });
+    return blocks.map((block) => {
+      const titleEl = block.querySelector('h4[class*="leaderboard-game-title_name"]');
+      const title = (titleEl?.textContent || '').trim();
+
+      const rowEls = block.querySelectorAll('div[class^="leaderboard-score_leaderboardScore"]');
+      const rows = [];
+      for (const el of rowEls) {
+        const rankTxt   = el.querySelector('h5[class^="leaderboard-score_rank"]')?.textContent?.trim() || '';
+        const nameTxt   = el.querySelector('h5[class^="leaderboard-score_username"]')?.textContent?.trim() || '';
+        const scoreTxt  = el.querySelector('h5[class^="leaderboard-score_scorePoints"]')?.textContent?.trim() || '';
+
+        const rank  = parseInt(onlyDigits(rankTxt)) || null;
+        const score = numish(scoreTxt) ? parseInt(onlyDigits(scoreTxt)) : null;
+
+        if (!rank || !score || !nameTxt || hasScoreLikeInName(nameTxt)) continue;
+
+        rows.push({ rank, player: nameTxt, score, score_formatted: scoreTxt || null });
       }
-      return out;
-    });
-  }
 
-  // Fallback: heuristics over divs
-  return await page.$$eval('body *', (nodes) => {
-    const onlyDigits = (s) => (s||'').replace(/[^\d]/g,'');
-    const looksScore = (s) => /\d{1,3}(,\d{3})+/.test(s||'') || /^\d{5,}$/.test((s||'').replace(/[^\d]/g,''));
-    const out = [];
-    for (const el of nodes) {
-      const st = window.getComputedStyle(el);
-      if (st.display === 'none' || st.visibility === 'hidden') continue;
-      const text = el.innerText?.trim();
-      if (!text) continue;
-      const lines = text.split(/\n+/).map(s=>s.trim()).filter(Boolean);
-      if (lines.length < 2) continue;
-      const rankLine = lines.find(l=>/^\d+$/.test(l));
-      const scoreLine = [...lines].reverse().find(looksScore);
-      if (!rankLine || !scoreLine) continue;
-      const ri = lines.indexOf(rankLine); const si = lines.lastIndexOf(scoreLine);
-      let player = null;
-      if (si - ri >= 2) player = lines.slice(ri+1, si).join(' ').replace(/\s+/g,' ');
-      else player = lines.find((l,i)=>i!==ri && i!==si && !/^\d+$/.test(l)) || null;
-      if (!player) continue;
-      out.push({
-        rank: parseInt(onlyDigits(rankLine)) || null,
-        player,
-        score: parseInt(onlyDigits(scoreLine)) || null,
-        score_formatted: scoreLine
-      });
-    }
-    // Dedup
-    const seen = new Set();
-    return out.filter(r => { const k = `${r.rank}|${r.player}|${r.score}`; if (seen.has(k)) return false; seen.add(k); return true; });
+      rows.sort((a,b)=>a.rank-b.rank);
+      return { game: title, rows };
+    }).filter(g => g.rows.length > 0);
   });
 }
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await (await browser.newContext()).newPage();
-
   await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle');
 
-  const rows = await extractRows(page);
+  const games = await extractGames(page);
   await browser.close();
 
   await fs.mkdir(path.join(process.cwd(), 'public', 'data'), { recursive: true });
@@ -123,10 +72,10 @@ async function extractRows(page) {
     suite: SUITE_ID,
     target: TARGET_URL,
     scraped_at: new Date().toISOString(),
-    rows: rows.length,
-    data: rows
+    games,
+    rows: games.flatMap(g => g.rows), // convenience aggregate
   };
   const outPath = path.join('public', 'data', `${SUITE_ID}.json`);
   await fs.writeFile(outPath, JSON.stringify(out, null, 2), 'utf8');
-  console.log(`Saved ${outPath} (${rows.length} rows)`);
-})();
+  console.log(`Saved ${outPath} (${games.reduce((n,g)=>n+g.rows.length,0)} rows across ${games.length} game(s))`);
+})().catch(e => { console.error(e); process.exit(1); });
