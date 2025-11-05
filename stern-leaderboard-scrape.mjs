@@ -113,7 +113,7 @@ async function captureAllGamesOverTime(page, {
     suite: SUITE_ID,
     target: TARGET_URL,
     scraped_at: new Date().toISOString(),
-    pages_base: "https://solidstatekc.github.io/homeleaderboards/data",
+    pages_base: "https://solidstatekc.github.io/ichlb/data",
     games,
     rows: games.flatMap(g => g.rows)
   };
